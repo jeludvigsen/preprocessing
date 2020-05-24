@@ -1,0 +1,231 @@
+######-------- CREDIT CARD FRAUD, DATA SET ------- ###########
+
+#OBS! Import Data Set as:
+
+# cred  = pd.read_csv("YOUR PATH", delimiter = ",")
+
+
+#--- Shuffle data
+cred = cred.sample(frac = 1, random_state = 0).reset_index(drop=True)
+
+# Split training and test data
+X, y = cred.iloc[:,0:30], cred['Class']
+
+#Test, training data split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.20,
+                                                    random_state=0)
+
+#Split the training data into validation set 
+X_val_train, X_val_test, y_val_train, y_val_test = train_test_split(X_train, 
+                                                                    y_train, 
+                                                                    test_size = 0.1,
+                                                    random_state=0)
+
+y_train = y_train.reset_index(drop=True)
+y_val_train = y_val_train.reset_index(drop=True)
+
+#normalize the validation data
+std = SS().fit(X_val_train)
+
+X_val_train = std.transform(X_val_train)
+
+X_val_test = std.transform(X_val_test)
+
+
+# Normalizing the training and test data
+std = SS().fit(X_train)
+
+X_train = std.transform(X_train)
+
+X_test = std.transform(X_test)
+
+#%%
+#######--------------------      VALIDATION        ------------------##########
+
+###############################################################################
+# Fit the Rusboost to the validation set with different iterations and splits #
+###############################################################################
+
+#check the imbalanced proportion
+imbalanced_ratio = len(y_val_train[y_val_train == 1])/len(y_val_train)
+
+#Set up different proportions and iterations t check what ratio and iterations performs the best
+ratios = [imbalanced_ratio, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009]
+
+#number of iterations to validate
+iterations = [3,4,5,6,7,8,9,10]
+
+result_rus_val = np.empty([len(iterations),len(ratios)])
+
+#loop for evaluating different splits and optimal number of iterations.
+for k in range(len(iterations)):
+    for j in range(len(ratios)):
+        rusb_val_mam = rusboost_lr(xtrain = X_val_train, ytrain = y_val_train, 
+                   xtest = X_test, proportion = ratios[j], 
+                   iterations = iterations[k])
+        mam_val_rus = f1_score(y_test, rusb_val_mam)
+        result_rus_val[k,j] = mam_val_rus
+
+#Choose iteration and split 
+res = np.where(result_rus_val == np.amax(result_rus_val, axis=None))        
+
+#COMMENT: Use 4 iterations and the original imbalanced ratio to the test set. 
+#         Best Score: 0.8269
+
+
+#%%
+
+################################################################
+# Fit the VAE with different ratios between min and majority ###
+################################################################
+# Number of samples to generate
+maj = len(y_val_train[y_val_train == 0])
+mino = len(y_val_train[y_val_train == 1])
+frac = 0.03
+num_samples = round(1/(1/frac - 1) * maj - mino)
+num_samples
+
+# Variational Oversampling 
+vos = VOS(hidden_dim= 1000,
+                        latent_dim=2,
+                        minority_class_id=1,
+                        verbose=1,
+                        epochs=15,
+                        num_samples_to_generate = num_samples,
+                        random_state = 0,
+                        optimizer="Adam")
+
+#Fit the VAE oversampling model and get new data set
+X_res_val,y_res_val = vos.fit_oversample(X_val_train,y_val_train)
+
+#--- Fit and predict with logistic regression
+logReg_vae = LogisticRegression(random_state = 0)
+
+#fit
+lr_vae_fit = logReg_vae.fit(X_res_val, y_res_val)
+
+#predict
+pred_lr_vae_val = logReg_vae.predict(X_val_test)
+
+#F1-Score
+mom_vae_val = f1_score(y_val_test, pred_lr_vae_val)
+f1_score(y_val_test, pred_lr_vae_val) 
+
+#Best Proportion of minority class: 0.03
+
+#%%
+
+################################################################
+######### FIT the RUSBOOST and VAE model ######################
+################################################################
+
+
+imbalanced_ratio = len(y_res_val[y_res_val==1])/len(y_res_val)
+
+
+#Proportions of minority class
+ratios = [imbalanced_ratio, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1]
+
+#Number of iterations
+iterations = [3,4,5,6,7,8,9,10]
+
+result_rus_val = np.empty([len(iterations),len(ratios)])
+
+#loop for evaluating different splits and optimal number of iterations.
+for k in range(len(iterations)):
+    for j in range(len(ratios)):
+        rusb_val_cred = rusboost_lr(xtrain = X_res_val, ytrain = pd.Series(y_res_val), 
+                   xtest = X_val_test, proportion = ratios[j], 
+                   iterations = iterations[k])
+        cred_val_rus = f1_score(y_val_test, rusb_val_cred)
+        result_rus_val[k,j] = cred_val_rus
+
+#Choose iteration and split 
+res = np.where(result_rus_val == np.amax(result_rus_val, axis=None))        
+
+# The best split, iteration and resulting F1-Score
+# 0.03, 3 iterations, 0.81
+ 
+#%%
+
+######------------------- TEST THE DATA --------------------------####
+
+#------------------------ Logistic Regression
+
+#--- Fit and predict with logistic regression
+lr = LogisticRegression(max_iter = 1000, random_state = 0)
+
+#fit
+wl = lr.fit(X_train, y_train)
+
+#predict
+lr_org = wl.predict(X_test)
+
+#Sensitiviy and F1-score
+cred_recall = recall_score(y_test, lr_org)
+cred_org_lr = f1_score(y_test, lr_org)
+f1_score(y_test, lr_org) 
+
+#%%
+imb_learn = len(y_train[y_train ==1])/len(y_train)
+#------------------------ Rusboost
+rusb = rusboost_lr(xtrain = X_train, ytrain = y_train, 
+                   xtest = X_test, proportion = imb_learn, iterations = 4)
+
+#Sensitiviy and F1-score
+cred_rus_recall = recall_score(y_test,rusb) 
+cred_rus = f1_score(y_test, rusb)
+f1_score(y_test, rusb) 
+#%%
+#------------------------ VAE Method on test data
+
+# Number of samples to generate
+maj = len(y_train[y_train == 0])
+mino = len(y_train[y_train == 1])
+frac = 0.03
+num_samples = round(1/(1/frac - 1) * maj - mino)
+num_samples
+
+
+# Variational Oversampling 
+vos = VOS(hidden_dim= 1000,
+                        latent_dim=2,
+                        minority_class_id=1,
+                        verbose=1,
+                        epochs=15,
+                        num_samples_to_generate = num_samples,
+                        random_state = 0,
+                        optimizer="Adam")
+
+X_res,y_res = vos.fit_oversample(X_train,y_train)
+
+
+#--- Fit and predict with logistic regression
+logReg_vae = LogisticRegression(random_state = 0)
+
+#fit
+lr_vae_fit = logReg_vae.fit(X_res, y_res)
+
+#predict
+pred_lr_vae = logReg_vae.predict(X_test)
+
+#Sensitiviy and F1-score
+cred_vae_recall = recall_score(y_test,pred_lr_vae) 
+cred_vae = f1_score(y_test, pred_lr_vae)
+f1_score(y_test, pred_lr_vae)
+
+
+#%%
+imb_ratio = len(y_res[y_res == 1])/len(y_res)
+
+#------------------------ VAE + RUSBoost
+
+cred_rus_vae_lr = rusboost_lr(xtrain = X_res, ytrain = pd.Series(y_res), 
+                              xtest = X_test, proportion = imb_ratio, iterations = 3)
+
+#Sensitiviy and F1-score
+cred_rus_vae = f1_score(y_test,cred_rus_vae_lr)
+cred_rus_vae_recall = recall_score(y_test, cred_rus_vae_lr)
+
+print(cred_rus_vae_recall,cred_rus_vae)
+#Sensitivity: 0.87, F1-score: 0.8246
