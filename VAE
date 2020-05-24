@@ -1,0 +1,153 @@
+class VOS:
+
+
+    def __init__(self, epochs=10, hidden_dim=10,
+                 batch_size=64, latent_dim=1, 
+                 minority_class_id=1, verbose=True, 
+                 random_state=0, num_samples_to_generate=100,
+                 optimizer = "adam"):
+        #Number of epochs
+        self.epochs = epochs
+        #How many batches, the trainin set should be split into.
+        self.batch_size = batch_size
+        #How big the intermediate dimension or hidden dimension should be
+        self.hidden_dim = hidden_dim
+        #How big the latent dimension should be
+        self.latent_dim = latent_dim
+        #Minority Class ID, Default = 1
+        self.minority_class_id = minority_class_id
+        # Verbose: "See" the traning procedure while training
+        self.verbose = verbose
+        #random state. To generate same sampled results
+        self.random_state = random_state
+        #number of samples to generate
+        self.num_samples_to_generate = num_samples_to_generate
+        #What optimizer to use
+        self.optimizer = optimizer
+        
+        #set random seed
+        np.random.seed(random_state)
+        
+        # Reparameterization trick function
+    def sampling(self, args):
+
+
+        z_mean, z_log_var = args
+        batch = K.shape(z_mean)[0]
+        dim = K.int_shape(z_mean)[1]
+        epsilon = K.random_normal(shape=(batch, dim))
+        return z_mean + K.exp(0.5 * z_log_var) * epsilon
+
+
+        # Function for building and training the model
+    def build_train(self, x_train, x_test=None,
+                    *args, **kwargs):
+        
+        #Original dimension
+        org_dim = x_train.shape[1]
+        #Input Shape
+        inp_shape = (org_dim, )
+        
+        
+        #Input layer
+        inputs = Input(shape=inp_shape, name = 'Input_to_Encoder')
+        
+        #Pass Input layer to hidden layer/ intermediate layer, x
+        x = Dense(self.hidden_dim, activation='relu')(inputs)
+        
+        #Pass hidden layer to latent layer for mean and variance
+        z_mean = Dense(self.latent_dim, name='z_mean')(x)
+        z_log_var = Dense(self.latent_dim, name='z_log_var')(x)
+        
+        #Pass mean and variance to sampling function. Creating z-layer with lambda-layer.
+        z = Lambda(self.sampling,
+                   output_shape=(self.latent_dim, ),
+                   name='z')([z_mean, z_log_var])
+       
+        #The encoder, input and output layers
+        encoder = Model(inputs, [z_mean, z_log_var, z], name='encoder')
+        
+        #If verbose = 1, "see" the traning proceedure, while training.
+        if self.verbose:
+            encoder.summary()
+        
+        # Create input layer for decoder. Input z layer.
+        latent_inputs = Input(shape=(self.latent_dim, ), name='z_sampling')
+       
+        # Pass the z input layer to the hidden layer, x
+        x = Dense(self.hidden_dim, activation='relu')(latent_inputs)
+        
+        #Pass the hidden layer, x to the output layer. 
+        outputs = Dense(org_dim, activation='sigmoid')(x)
+        #The decoder, build model with the latent input layer and the output layer.
+        decoder = Model(latent_inputs, outputs, name='decoder')
+        
+        #If verbose = 1, "see" the traning proceedure, while training.
+        if self.verbose:
+            decoder.summary()
+        
+        #Instantiate the VAE model
+        outputs = decoder(encoder(inputs)[2])
+        self.vae = Model(inputs, outputs, name='vae')
+          
+        
+        #Caclulate reconstruction from input and output
+        reconstruction_loss = mse(inputs, outputs)
+        reconstruction_loss *= org_dim
+        
+        #Kullback-liebler divergence loss
+        kl_loss = 1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
+        kl_loss = K.sum(kl_loss, axis=-1)
+        kl_loss *= -0.5
+        
+        #The total vae loss
+        vae_loss = K.mean(reconstruction_loss + kl_loss)
+        self.vae.add_loss(vae_loss)
+        
+        #Compile model with chosen optimizer, Adam
+        self.vae.compile(optimizer=self.optimizer)
+        if self.verbose:
+            self.vae.summary()
+        
+        #Fit the VAE model
+        self.vae.fit(x_train,
+                     epochs=self.epochs,
+                     batch_size=self.batch_size,
+                     verbose=self.verbose)
+            
+        self.encoder = encoder
+        self.decoder = decoder
+        return
+
+        #Function for generating  synthetic samples
+    def fit_oversample(self, Xtrain, ytrain, **vae_kwargs):
+
+        #Number of samples to generate
+        num_samples_to_generate = self.num_samples_to_generate
+        
+        #Scale the data set
+        self.ss = SS()
+        self.ss.fit(Xtrain[ytrain == self.minority_class_id])
+        X = self.ss.transform(Xtrain[ytrain == self.minority_class_id])
+        
+        #Pass data set to the build function
+        self.build_train(X, **vae_kwargs)
+        
+        #randomly sample from standard normal
+        z_latent_sample = np.random.normal(0, 1,
+                                    (num_samples_to_generate,
+                                     self.latent_dim))
+        
+        #Generate the synthetic samples by passing the z sample
+        synthetic_samples = self.decoder.predict(z_latent_sample)
+        
+        #Rescale the data
+        synthetic_X = self.ss.inverse_transform(synthetic_samples)
+        
+        synthetic_y = np.ones(num_samples_to_generate)\
+            * self.minority_class_id
+        
+        #Final step, concetenate original observations with synthetic observations
+        X_new = np.concatenate((Xtrain, synthetic_X))
+        y_new = np.concatenate((ytrain, synthetic_y))
+        return(X_new, y_new)
