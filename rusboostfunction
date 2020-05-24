@@ -1,0 +1,185 @@
+############ RUSBOOST FUNCTION ####################
+
+def rusboost_lr(xtrain, ytrain, xtest, proportion, iterations):
+    ########## Random undersampling boosting ##################
+    
+    import numpy as np
+    import pandas as pd
+    from sklearn.linear_model import LogisticRegression
+    
+    # Initalize Weight update
+    weight_alpha = []
+        
+    # Initalize the classifier model
+    model = []
+    num_iterations = iterations
+    
+    # WeakLearner, Logistic Regression
+    lr = LogisticRegression(max_iter = 1000)
+    
+    #Store lr for each iteration
+    for i in range(num_iterations):
+        model.append(lr)
+    
+    X = xtrain
+    X_test = xtest    
+    
+    # Label or target variable Y
+    Y = ytrain
+
+    # initialize weight
+    W = np.empty([len(X),1])
+         
+    # 1/(number of observations)
+    inititalize_weight = 1/len(X)
+            
+    # Append initial weight to W
+    for i in range(len(X)):
+        W[i] = inititalize_weight
+
+    #### Test loop in function
+    
+    for q in range(num_iterations):
+    
+    
+        #--------- UNDER SAMPLE FROM MAJORITY CLASS ------------------#
+        
+        #number of samples of minority class
+        min_num = len(Y[Y == 1])
+        
+        multiplier = (1/proportion-1)
+        
+        #----- Under Sample Majority class With initial sample weight
+        w_maj = np.reshape(W[Y[Y == 0].index], W[Y[Y == 0].index].size)
+        sum_wmaj = sum(w_maj)
+        
+        #normalize
+        for i in range(len(w_maj)):
+            w_maj[i] = w_maj[i]/sum_wmaj
+            
+        #Randomly under-sample
+        if q == 0:
+            np.random.seed(q)
+            majority = np.random.choice(Y[Y == 0].index.values, 
+                                        size = round((min_num*multiplier)), 
+                                        replace = False) 
+        else:
+            np.random.seed(q)
+            majority = np.random.choice(Y[Y == 0].index.values, 
+                                        size = round((min_num*multiplier)), 
+                                        replace = True, 
+                                        p = w_maj)
+            
+        majority = Y[majority]
+    
+        # Concatenate with minority class, extract corresponding indexed values from X and Weights
+        y_new = pd.concat([Y[Y == 1], majority])
+                
+        X_new = X[y_new.index,:]
+        
+        
+        y_new = y_new.reset_index(drop=True)     
+        
+        # Get corresponding weights
+        rows = y_new.index.values
+        
+        W_new = W[rows]
+        
+        
+        # Normalize new weights so they sum to 1
+        sum_W_new = sum(W_new)
+        for j in range(len(W_new)):
+            W_new[j] = W_new[j]/sum_W_new
+            
+        W_new = list(W_new[:,0])
+        
+        #Sample with replacement with new distirbution and fit model 
+        np.random.seed(q)
+        new_idx = np.random.choice(y_new.index.values, 
+                                   size = len(y_new), replace = True, 
+                                   p = W_new)
+        
+        y_new = y_new[new_idx]
+        X_new = X_new[new_idx]
+        
+        #----- fit model
+        model[q].fit(X_new, y_new)
+        
+        #---- Predict on training data
+        pred = model[q].predict(X)
+        pred_prob = model[q].predict_proba(X)
+        
+        #----  Calculate psuedo loss
+        smooth = 1/len(X)
+        
+        idx  = Y[pred != Y]
+        #false negative, predicted 1 but true value = 0
+        fn = idx[idx == 0]
+        
+        #false positive, predicted 0 but true = 1
+        fp = idx[idx == 1]
+        #Normalize W
+        
+        #Psuedo Loss for all observations on traing data
+        
+        fp_sum = sum(list(W[fp.index,0]) * (1 - pred_prob[fp.index,0]\
+                     + pred_prob[fp.index,1]))
+        fn_sum = sum(list(W[fn.index,0]) * (1 - pred_prob[fn.index,1]\
+                     + pred_prob[fn.index,0]))
+        
+        psuedo_loss = 0.5 * (fp_sum + fn_sum)
+        
+        #Update thw weight Smooth Se shapire 1999. adaboost m2. Name something else?
+        weight_alpha.append((psuedo_loss+smooth)/(1-psuedo_loss+smooth))
+        
+        # Update W with new weights
+        W[fp.index,0] = W[fp.index,0] * weight_alpha[q]**(0.5*(1+pred_prob[fp.index,0]\
+         - pred_prob[fp.index,1]))
+        W[fn.index,0] = W[fn.index,0] * weight_alpha[q]**(0.5*(1+pred_prob[fn.index,1]\
+         - pred_prob[fn.index,0]))
+        
+        #Normalize W
+        norm_W = sum(W[:,0])
+        
+        #Update and normalize the Weight W:
+        for l in range(len(W)):
+            W[l] = W[l]/norm_W
+            
+            
+    #--------------- PREDICT AND CLASSIFY THE Q ITERATION ---------------------------------------#
+    #--------------- Store predicted result for iteraion k
+    
+    # Matrix to store final weighted results of each iteration
+    score = np.zeros([len(X_test), 2])
+    
+    #normalize alpha weight 
+    log_weight_alpha = np.zeros([len(weight_alpha),1])
+    
+    for i in range(len(weight_alpha)):
+        log_weight_alpha[i] = np.log(1/weight_alpha[i])
+    
+    sum_log_alpha = sum(log_weight_alpha)
+    
+    
+    for q in range(num_iterations):
+        #Predict probabilities of class
+        test_proba = model[q].predict_proba(X_test)
+        
+        #for k in range(len(num_iterations)):
+        log_weight_alpha[q] = log_weight_alpha[q]/sum_log_alpha
+        
+        # if pred is 1 then multiply its corresponding probability with log(1/weight)
+        
+        for i in range(len(X_test)):
+            score[i][1,] += test_proba[i][1,] * log_weight_alpha[q]
+            score[i][0,] += test_proba[i][0,] * log_weight_alpha[q]
+            
+        # Retrun results 
+        classification = np.zeros([len(xtest),1])
+        
+        for k in range(len(xtest)):
+            if score[k][1,] >= 0.5:
+                classification[k] = 1
+            else:
+                classification[k] = 0
+    return(classification)
