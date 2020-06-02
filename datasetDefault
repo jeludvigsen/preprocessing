@@ -1,7 +1,7 @@
 ######-------- DEFAULT of credit card clients, DATA SET ------- ###########
 
 #### LOAD DATA SET
-
+#### DATA set can be found here: https://archive.ics.uci.edu/ml/datasets/default+of+credit+card+clients
 #### OBS! Load data set as:
 
 # uci = pd.read_csv('YOUR PATH', delimiter = ",")
