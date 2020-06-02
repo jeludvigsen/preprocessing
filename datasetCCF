@@ -1,5 +1,6 @@
 ######-------- CREDIT CARD FRAUD, DATA SET ------- ###########
 
+### Data set can be downloaded here: https://www.kaggle.com/mlg-ulb/creditcardfraud
 #OBS! Import Data Set as:
 
 # cred  = pd.read_csv("YOUR PATH", delimiter = ",")
